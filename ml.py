@@ -6,8 +6,6 @@ import re
 
 CSV_FILE = "All_States_GE.csv"
 
-# --- NEW: Name Normalization Function ---
-# This is the core of the fix. It standardizes names for consistent matching.
 def _normalize_name(name):
     """
     Cleans and standardizes a candidate's name.
@@ -20,7 +18,7 @@ def _normalize_name(name):
     
     name = name.lower().strip()
     
-    # A list of common prefixes to remove
+
     prefixes = [
         'dr.','dr ','mrs.','mrs ','ms.','ms ','mr.','mr ', 'adv.', 'adv ',
         'prof.','prof ','smt.','smt ','shri.','shri ','ku.','kum.',
@@ -30,19 +28,14 @@ def _normalize_name(name):
         if name.startswith(prefix):
             name = name[len(prefix):].lstrip()
             
-    # Remove punctuation (except spaces) and collapse multiple spaces
+
     name = re.sub(r'[^\w\s]', '', name)
     name = re.sub(r'\s+', ' ', name).strip()
     return name
 
 
 def _prepare():
-    """
-    Prepares and enriches the election data DataFrame. This function now correctly calculates
-    state and national party waves and generates a 'candidate_alpha_score' using an ML model.
-    
-    KEY FIX: It introduces a 'candidate_normalized' column to handle name variations.
-    """
+   
     df = pd.read_csv(CSV_FILE, low_memory=False)
     df.rename(columns={
         "Year": "year", "State_Name": "state_name", "Constituency_Name": "constituency_name",
@@ -56,9 +49,9 @@ def _prepare():
     
     df.dropna(subset=["year", "state_name", "constituency_name", "candidate", "party", "votes_polled", "total_votes"], inplace=True)
     
-    # --- FIX: Create the normalized name column for all lookups and groupings ---
+
     df["candidate_normalized"] = df["candidate"].apply(_normalize_name)
-    # Remove entries where the name becomes empty after normalization (e.g., was just a title)
+
     df = df[df["candidate_normalized"] != '']
 
     df["year"] = df["year"].astype(int)
@@ -67,13 +60,12 @@ def _prepare():
     df.dropna(subset=["vote_share_%"], inplace=True)
     df.sort_values(["state_name", "constituency_name", "year"], inplace=True)
 
-    # State-level wave calculation
+
     st = df.groupby(["year", "state_name", "party"])["vote_share_%"].mean().rename("avg_st").reset_index()
     st["st_prev"] = st.groupby(["state_name", "party"])["avg_st"].shift(1)
     st["state_party_wave"] = st["avg_st"] - st["st_prev"]
     df = df.merge(st[["year", "state_name", "party", "st_prev", "state_party_wave"]], on=["year", "state_name", "party"], how="left")
 
-    # National-level wave calculation
     nat = df.groupby(["year", "party"])["vote_share_%"].mean().rename("avg_nat").reset_index()
     nat["nat_prev"] = nat.groupby("party")["avg_nat"].shift(1)
     nat["nat_party_wave"] = nat["avg_nat"] - nat["nat_prev"]
@@ -81,7 +73,7 @@ def _prepare():
 
     df.sort_values(["candidate_normalized", "year"], inplace=True)
     
-    # --- FIX: Group by the normalized name to track history correctly ---
+
     df["candidate_prev_win"] = df.groupby("candidate_normalized")["position"].shift(1).fillna(0).apply(lambda x: 1 if x == 1 else 0)
     df["seat_party_3cycle_avg"] = (df.groupby(["constituency_name", "party"])["vote_share_%"].rolling(window=3, min_periods=1).mean().reset_index(level=[0, 1], drop=True))
     
@@ -100,8 +92,6 @@ def _prepare():
 
 _DF = _prepare()
 
-# --- FIX: Create a clean, unique list of candidate names for searching ---
-# We use the original names for display but ensure they are unique per normalized name.
 _UNIQUE_CANDIDATES = sorted(_DF.drop_duplicates(subset=['candidate_normalized'])['candidate'].dropna().unique().tolist())
 
 
@@ -112,27 +102,23 @@ def search_candidates(query, year=None):
     """
     choices = _UNIQUE_CANDIDATES
     if year:
-        # If a year is specified, we find the unique candidates for that year
+      
         year_cands_normalized = _DF[_DF.year == int(year)]["candidate_normalized"].unique()
-        # Get the original names corresponding to the normalized names for that year
+       
         year_cands = sorted(_DF[_DF['candidate_normalized'].isin(year_cands_normalized)]['candidate'].unique().tolist())
         if year_cands:
             choices = year_cands
     
-    # Fuzzy search using the user's query against the clean list of names
+    
     matches = process.extract(query, choices, scorer=fuzz.WRatio, limit=10, score_cutoff=75)
     return [match[0] for match in matches]
 
 
 def _calculate_electoral_strength(candidate_name, party, year, constituency):
-    """
-    Calculates a projected vote share for a candidate based on historical data.
-    FIX: Now normalizes the candidate name to correctly fetch historical performance.
-    """
-    # --- FIX: Normalize the input name to match against the 'candidate_normalized' column ---
+   
     normalized_cand_name = _normalize_name(candidate_name)
 
-    # P1: Seat's baseline for the party (3-cycle average VS%)
+    
     seat_history = _DF[(_DF.constituency_name == constituency) & (_DF.party == party) & (_DF.year < year)].sort_values('year')
     base_seat_strength = seat_history["seat_party_3cycle_avg"].iloc[-1] if not seat_history.empty else 0
     
@@ -145,12 +131,12 @@ def _calculate_electoral_strength(candidate_name, party, year, constituency):
         else:
             base_seat_strength = 10.0
 
-    # P2: State-level momentum for the party
+
     state_name = _DF.loc[_DF.constituency_name == constituency, 'state_name'].iloc[0]
     wave_record = _DF[(_DF.year == year) & (_DF.state_name == state_name) & (_DF.party == party)]
     state_wave = wave_record['state_party_wave'].mean() if not wave_record.empty and not np.isnan(wave_record['state_party_wave'].mean()) else 0.0
     
-    # --- FIX: Use normalized name to get correct historical Alpha score ---
+ 
     cand_history = _DF[(_DF.candidate_normalized == normalized_cand_name) & (_DF.year < year)]
     candidate_alpha = cand_history['candidate_alpha_score'].mean() if not cand_history.empty and not np.isnan(cand_history['candidate_alpha_score'].mean()) else 0.0
     
@@ -163,11 +149,7 @@ def _calculate_electoral_strength(candidate_name, party, year, constituency):
 
 
 def analyze_performance(year, candidate_name):
-    """
-    Analyzes a single candidate's performance in a given election.
-    FIX: Now normalizes the candidate name for accurate lookup.
-    """
-    # --- FIX: Normalize the input name ---
+  
     normalized_name = _normalize_name(candidate_name)
     main_cand_record = _DF[(_DF.year == year) & (_DF.candidate_normalized == normalized_name)]
     
@@ -179,7 +161,6 @@ def analyze_performance(year, candidate_name):
     party = record.party
     actual_vs = record["vote_share_%"]
     
-    # We pass the original name for display, but the function will normalize it again
     expected_vs = _calculate_electoral_strength(candidate_name, party, year, constituency)
 
     overperformance = actual_vs - expected_vs
@@ -192,7 +173,7 @@ def analyze_performance(year, candidate_name):
         tag = "UNDERPERFORMED"
 
     return {"status": "success", "data": [{
-        "candidate": record.candidate, # Return the original name for better display
+        "candidate": record.candidate, 
         "party": party,
         "constituency": f"{constituency}, {record.state_name} – {year}",
         "actual_vs": round(actual_vs, 2),
@@ -203,11 +184,7 @@ def analyze_performance(year, candidate_name):
 
 
 def get_candidate_history(name):
-    """
-    Retrieves the complete electoral history for a given candidate.
-    FIX: Now normalizes the name to find all records for that person.
-    """
-    # --- FIX: Normalize the input name ---
+    
     normalized_name = _normalize_name(name)
     df = _DF[_DF["candidate_normalized"] == normalized_name]
     
@@ -223,18 +200,14 @@ def get_candidate_history(name):
 
 
 def battleground_faceoff(year, state, constituency, cand1_name, cand2_name):
-    """
-    Simulates a head-to-head race.
-    FIX: Normalizes both candidate names and uses normalized names to find their last contested party.
-    """
-    # --- FIX: Normalize both input names ---
+    
     norm_cand1 = _normalize_name(cand1_name)
     norm_cand2 = _normalize_name(cand2_name)
 
     if norm_cand1 == "" or norm_cand2 == "":
         return {"status": "error", "message": "One or both candidate names are invalid."}
 
-    # --- FIX: Use normalized names for lookup ---
+   
     party1_series = _DF.loc[_DF.candidate_normalized == norm_cand1].sort_values('year', ascending=False)['party']
     party2_series = _DF.loc[_DF.candidate_normalized == norm_cand2].sort_values('year', ascending=False)['party']
 
@@ -268,12 +241,11 @@ def battleground_faceoff(year, state, constituency, cand1_name, cand2_name):
     }
 
 
-# This function remains largely the same but relies on the globally prepared unique candidate list.
 def get_meta_info():
     years = sorted(_DF["year"].unique().tolist(), reverse=True)
     return years, _UNIQUE_CANDIDATES
 
-# --- get_state_summary does not deal with candidate names and needs no changes ---
+
 def get_state_summary(year, state):
     df = _DF[(_DF.year == year) & (_DF.state_name.str.lower() == state.lower())]
     if df.empty:
