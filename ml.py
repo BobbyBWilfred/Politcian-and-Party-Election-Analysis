@@ -28,13 +28,11 @@ def _prepare():
     df.dropna(subset=["vote_share_%"], inplace=True)
     df.sort_values(["state_name", "constituency_name", "year"], inplace=True)
 
-    # State-level wave calculation
     st = df.groupby(["year", "state_name", "party"])["vote_share_%"].mean().rename("avg_st").reset_index()
     st["st_prev"] = st.groupby(["state_name", "party"])["avg_st"].shift(1)
     st["state_party_wave"] = st["avg_st"] - st["st_prev"]
     df = df.merge(st[["year", "state_name", "party", "st_prev", "state_party_wave"]], on=["year", "state_name", "party"], how="left")
 
-    # National-level wave calculation
     nat = df.groupby(["year", "party"])["vote_share_%"].mean().rename("avg_nat").reset_index()
     nat["nat_prev"] = nat.groupby("party")["avg_nat"].shift(1)
     nat["nat_party_wave"] = nat["avg_nat"] - nat["nat_prev"]
@@ -74,11 +72,9 @@ def _calculate_electoral_strength(candidate_name, party, year, constituency):
     Calculates a projected vote share for a candidate based on historical data.
     This new version uses an additive model with caps to produce more realistic projections.
     """
-    # P1: Seat's baseline for the party (3-cycle average VS%)
     seat_history = _DF[(_DF.constituency_name == constituency) & (_DF.party == party) & (_DF.year < year)].sort_values('year')
     base_seat_strength = seat_history["seat_party_3cycle_avg"].iloc[-1] if not seat_history.empty else 0
     
-    # Fallback to state average if no history in the seat
     if base_seat_strength == 0:
         state_name_series = _DF.loc[_DF.constituency_name == constituency, 'state_name']
         if not state_name_series.empty:
@@ -86,25 +82,20 @@ def _calculate_electoral_strength(candidate_name, party, year, constituency):
             state_history = _DF[(_DF.state_name == state_name) & (_DF.party == party) & (_DF.year < year)]
             base_seat_strength = state_history['vote_share_%'].mean() if not state_history.empty else 10.0
         else:
-            base_seat_strength = 10.0 # Default for unknown constituencies
+            base_seat_strength = 10.0 
 
-    # P2: State-level momentum for the party
     state_name = _DF.loc[_DF.constituency_name == constituency, 'state_name'].iloc[0]
     wave_record = _DF[(_DF.year == year) & (_DF.state_name == state_name) & (_DF.party == party)]
     state_wave = wave_record['state_party_wave'].mean() if not wave_record.empty and not np.isnan(wave_record['state_party_wave'].mean()) else 0.0
-    
-    # P3: Candidate's personal pull (average historical overperformance)
+
     cand_history = _DF[(_DF.candidate == candidate_name) & (_DF.year < year)]
     candidate_alpha = cand_history['candidate_alpha_score'].mean() if not cand_history.empty and not np.isnan(cand_history['candidate_alpha_score'].mean()) else 0.0
-    
-    # Dampen the effect of extreme waves or alpha scores to keep predictions stable
+ 
     wave_effect = max(-10, min(10, state_wave))
     alpha_effect = max(-10, min(10, candidate_alpha))
 
-    # Additive Model: Start with baseline and adjust for wave and candidate strength
     strength_score = base_seat_strength + wave_effect + alpha_effect
-    
-    # Bound the final prediction to a realistic range (e.g., 5% to 70%)
+
     return max(5.0, min(70.0, strength_score))
 
 def analyze_performance(year, candidate_name):
@@ -121,13 +112,11 @@ def analyze_performance(year, candidate_name):
     party = record.party
     actual_vs = record["vote_share_%"]
 
-    # The new expected_vs is a direct projection, not relative to opponents.
-    # This avoids the inflation issue caused by the old normalization logic.
+
     expected_vs = _calculate_electoral_strength(candidate_name, party, year, constituency)
 
     overperformance = actual_vs - expected_vs
     
-    # Add a small buffer to define performance tags
     if abs(overperformance) <= 2.0:
         tag = "AS EXPECTED"
     elif overperformance > 2.0:
@@ -141,7 +130,7 @@ def analyze_performance(year, candidate_name):
         "actual_vs": round(actual_vs, 2),
         "expected_vs": round(expected_vs, 2),
         "performance_tag": tag,
-        "performance_score": round(overperformance, 2) # Return signed score for context
+        "performance_score": round(overperformance, 2) 
     }]}
 
 
@@ -190,11 +179,10 @@ def battleground_faceoff(year, state, constituency, cand1_name, cand2_name):
     party1 = party1_series.iloc[0]
     party2 = party2_series.iloc[0]
 
-    # Get the projected vote share for each candidate individually
     score1 = _calculate_electoral_strength(cand1_name, party1, year, constituency)
     score2 = _calculate_electoral_strength(cand2_name, party2, year, constituency)
 
-    # Normalize scores for the direct head-to-head contest
+
     total_score = score1 + score2
     if total_score == 0:
         proj1, proj2 = 50.0, 50.0
