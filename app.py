@@ -51,8 +51,7 @@ def top_performers():
     df['overperformance_score'] = df['candidate_alpha_score']
     df = df.sort_values(by="overperformance_score", ascending=False).drop_duplicates(subset=['candidate'])
 
-    # FIX: Select only the columns needed by the frontend to reduce data transfer
-    # and explicitly handle NaN values which are invalid in JSON.
+    
     display_cols = ['candidate', 'party', 'constituency_name', 'overperformance_score']
     
     top_df = df.head(15)[display_cols].replace({np.nan: None})
