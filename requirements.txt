@@ -1,0 +1,6 @@
+flask
+gunicorn
+pandas
+scikit-learn
+lightgbm
+rapidfuzz
